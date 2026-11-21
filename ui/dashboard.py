@@ -218,7 +218,12 @@ class DashboardScreen(QWidget):
             cb.setEnabled(not busy)
 
     def _on_scan_result(self, total: int) -> None:
-        self.estimate_label.setText(f"Доступно к очистке: {human_size(total)}")
+        try:
+            self.estimate_label.setText(
+                f"Доступно к очистке: {human_size(total)}"
+            )
+        except Exception:
+            self.estimate_label.setText("Доступно к очистке: н/д")
 
     def _refresh_metrics(self) -> None:
         try:

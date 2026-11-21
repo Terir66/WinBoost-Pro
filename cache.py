@@ -11,6 +11,7 @@ cache.py — модуль очистки кэша и временных файл
 from __future__ import annotations
 
 import glob
+import math
 import os
 import shutil
 from dataclasses import dataclass, field
@@ -24,16 +25,24 @@ APP_VERSION = "1.0"
 
 
 def human_size(num: float) -> str:
-    """Человекочитаемый размер: B / KB / MB / GB."""
+    """Человекочитаемый размер: B / KB / MB / GB.
+
+    Устойчив к inf/nan и переполнению: вместо падения возвращает 'н/д',
+    чтобы сбой одного числа не ломал весь лог очистки/сканирования.
+    """
     try:
-        num = float(num)
-    except (TypeError, ValueError):
-        return "0 B"
+        value = float(num)
+    except (TypeError, ValueError, OverflowError):
+        return "н/д"
+    if not math.isfinite(value):
+        return "н/д"
     for unit in ("B", "KB", "MB", "GB"):
-        if abs(num) < 1024.0 or unit == "GB":
-            return f"{int(num)} B" if unit == "B" else f"{num:.2f} {unit}"
-        num /= 1024.0
-    return f"{num:.2f} GB"
+        if abs(value) < 1024.0 or unit == "GB":
+            if unit == "B":
+                return f"{int(value)} B"
+            return f"{value:.2f} {unit}"
+        value /= 1024.0
+    return f"{value:.2f} GB"
 
 
 def localappdata() -> Path:
