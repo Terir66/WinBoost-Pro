@@ -1,0 +1,7 @@
+* text=auto
+
+*.py   text eol=crlf
+*.md   text eol=crlf
+*.txt  text eol=crlf
+*.ts   text eol=crlf
+*.ico  binary

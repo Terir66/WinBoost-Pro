@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+.Python
+pip-wheel-metadata/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Сборка PyInstaller
+build/
+dist/
+*.spec
+
+# Данные приложения и резервные копии (могут содержать состояние системы)
+backups/
+*.log
+
+# Переведённые бинарники (исходник .ts хранится в репозитории)
+*.qm
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Локальные секреты
+.env
+.env.*
