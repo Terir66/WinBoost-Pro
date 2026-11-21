@@ -128,10 +128,44 @@ def cpu_percent() -> float:
     return 0.0
 
 
+def gpu_name() -> str:
+    """Имя видеокарты через WMI (для AMD/Intel/NVIDIA)."""
+    try:
+        import wmi
+        names = [str(item.Name).strip() for item in
+                 wmi.WMI().Win32_VideoController() if getattr(item, "Name", None)]
+        if names:
+            # предпочитаем дискретную карту, если она есть
+            for name in names:
+                lowered = name.lower()
+                if any(word in lowered for word in ("nvidia", "geforce", "rtx",
+                                                    "gtx", "radeon rx", "arc")):
+                    return name
+            return names[0]
+    except Exception:
+        pass
+    try:
+        out = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+             "(Get-CimInstance Win32_VideoController).Name -join ', '"],
+            capture_output=True, timeout=8, check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        raw = out.stdout or b""
+        for encoding in ("utf-8", "cp866", "cp1251"):
+            try:
+                return raw.decode(encoding).strip()
+            except UnicodeDecodeError:
+                continue
+    except Exception:
+        pass
+    return "неизвестно"
+
+
 def gpu_percent() -> float:
     """
-    Загрузка GPU через nvidia-smi. Опционально: если утилиты нет — 0.
-    Никаких изменений ядра: только чтение, только визуал.
+    Загрузка GPU: сначала nvidia-smi, затем WMI-счётчики GPUEngine
+    (работают и для AMD/Intel). Никаких изменений ядра — только чтение.
     """
     try:
         out = subprocess.run(
@@ -142,6 +176,25 @@ def gpu_percent() -> float:
         value = (out.stdout or "").strip().splitlines()
         if value:
             return max(0.0, min(100.0, float(value[0].strip())))
+    except Exception:
+        pass
+
+    try:
+        import wmi
+        rows = wmi.WMI().Win32_PerfFormattedData_GPUPerformanceCounters_GPUEngine()
+        total = 0.0
+        found = False
+        for row in rows:
+            try:
+                name = str(getattr(row, "Name", "") or "")
+                if "engtype_3D" not in name:
+                    continue
+                total += float(getattr(row, "UtilizationPercentage", 0) or 0)
+                found = True
+            except Exception:
+                continue
+        if found:
+            return max(0.0, min(100.0, total))
     except Exception:
         pass
     return 0.0

@@ -44,7 +44,7 @@ from .autostart_screen import AutostartScreen, StartupActionWorker, StartupScanW
 from .settings_screen import SettingsScreen
 from .tweaks_tab import TweaksTab
 from .system_info import (
-    cpu_name, free_ram_gb, is_admin, windows_version,
+    cpu_name, free_ram_gb, gpu_name, is_admin, windows_version,
 )
 
 SETTINGS_FILE = Path.home() / ".winboost_pro_settings.json"
@@ -252,11 +252,13 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Готово")
         self.lbl_win = QLabel()
         self.lbl_cpu = QLabel()
+        self.lbl_gpu = QLabel()
         self.lbl_ram = QLabel()
-        self.lbl_win.setMaximumWidth(320)
-        self.lbl_cpu.setMaximumWidth(400)
-        self.lbl_ram.setMaximumWidth(220)
-        for label in (self.lbl_win, self.lbl_cpu, self.lbl_ram):
+        self.lbl_win.setMaximumWidth(260)
+        self.lbl_cpu.setMaximumWidth(320)
+        self.lbl_gpu.setMaximumWidth(260)
+        self.lbl_ram.setMaximumWidth(190)
+        for label in (self.lbl_win, self.lbl_cpu, self.lbl_gpu, self.lbl_ram):
             label.setToolTip(label.text())
             self.statusBar().addPermanentWidget(label)
 
@@ -288,7 +290,8 @@ class MainWindow(QMainWindow):
     def _refresh_statusbar(self) -> None:
         try:
             self.lbl_win.setText(f"OC: {windows_version()}")
-            self.lbl_cpu.setText(f"CPU: {cpu_name()[:52]}")
+            self.lbl_cpu.setText(f"CPU: {cpu_name()[:40]}")
+            self.lbl_gpu.setText(f"GPU: {gpu_name()[:34]}")
             self.lbl_ram.setText(f"{S.FREE_RAM_PREFIX}{free_ram_gb():.1f} ГБ")
         except Exception:
             pass

@@ -39,7 +39,13 @@ def find_app_icon(app: InstalledApp) -> QIcon:
     try:
         location = (app.install_location or "").strip().strip('"')
         if location:
-            candidates.append(Path(location))
+            from PySide6.QtGui import QFileIconProvider
+            target = Path(os.path.expandvars(location))
+            if target.is_file() and target.suffix.lower() == ".exe":
+                file_icon = QFileIconProvider().icon(target)
+                if not file_icon.isNull():
+                    return file_icon
+            candidates.append(target)
             # реестр иногда хранит путь к exe, а не к папке
             if candidates[-1].suffix.lower() == ".exe":
                 candidates[-1] = candidates[-1].parent
@@ -107,11 +113,38 @@ def app_path(app: InstalledApp) -> str:
     return "—"
 
 
+def extra_tool_apps() -> list[InstalledApp]:
+    """Служебные утилиты, которые должны быть всегда видны в списке."""
+    tools = [
+        ("Display Driver Uninstaller (DDU)",
+         r"C:\Program Files\Display Driver Uninstaller"),
+        ("NVCleanstall 1.19.0",
+         r"C:\Users\ASUS\Downloads\NVCleanstall_1.19.0.exe"),
+    ]
+    result: list[InstalledApp] = []
+    for name, path in tools:
+        if not os.path.exists(path):
+            continue
+        result.append(InstalledApp(
+            name=name,
+            version="",
+            publisher=S.TOOL_PUBLISHER,
+            install_location=path,
+            uninstall_string="",
+            quiet_uninstall_string="",
+            key_name="",
+            root="HKCU",
+            view="64-bit",
+        ))
+    return result
+
+
 class ProgramsScreen(QWidget):
     def __init__(self, main_window, parent=None):
         super().__init__(parent)
         self.main = main_window
         self._apps: list[InstalledApp] = []
+        self._tool_names: set[str] = set()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 22, 24, 22)
@@ -162,11 +195,14 @@ class ProgramsScreen(QWidget):
         layout.addWidget(self.progress)
 
         buttons = QHBoxLayout()
+        self.run_btn = AnimatedButton(S.BTN_RUN_TOOL)
+        self.run_btn.setObjectName("accent")
+        self.run_btn.clicked.connect(self._run_selected_tool)
         self.uninstall_btn = AnimatedButton(S.BTN_UNINSTALL)
-        self.uninstall_btn.setObjectName("accent")
         self.uninstall_btn.clicked.connect(self._uninstall_selected)
         self.leftovers_btn = AnimatedButton(S.BTN_CLEAN_LEFTOVERS)
         self.leftovers_btn.clicked.connect(self._cleanup_selected)
+        buttons.addWidget(self.run_btn)
         buttons.addWidget(self.uninstall_btn)
         buttons.addWidget(self.leftovers_btn)
         buttons.addStretch()
@@ -192,7 +228,9 @@ class ProgramsScreen(QWidget):
         self.leftovers_btn.setEnabled(not busy)
 
     def _set_apps(self, apps: list[InstalledApp]) -> None:
-        self._apps = apps
+        tools = extra_tool_apps()
+        self._tool_names = {tool.name for tool in tools}
+        self._apps = apps + tools
         self._filter()
 
     def _filter(self) -> None:
@@ -225,6 +263,23 @@ class ProgramsScreen(QWidget):
     def _selected_app(self) -> InstalledApp | None:
         return self._app_at(self.view.currentIndex())
 
+    def _is_tool(self, app: InstalledApp | None) -> bool:
+        return bool(app and app.name in self._tool_names)
+
+    def _run_tool(self, app: InstalledApp) -> None:
+        path = app_path(app)
+        if path == "—":
+            return
+        try:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.expandvars(path)))
+        except Exception:
+            pass
+
+    def _run_selected_tool(self) -> None:
+        app = self._selected_app()
+        if self._is_tool(app):
+            self._run_tool(app)
+
     def _show_row_menu(self, index: QModelIndex) -> None:
         app = self._app_at(index)
         if not app:
@@ -232,17 +287,25 @@ class ProgramsScreen(QWidget):
         menu = QMenu(self)
         act_open = menu.addAction(theme_icon("fa5s.folder-open", color="#0067c0"),
                                   S.BTN_OPEN_FOLDER)
-        act_uninstall = menu.addAction(theme_icon("fa.trash", color="#d13438"),
-                                       S.BTN_UNINSTALL)
-        act_leftovers = menu.addAction(theme_icon("fa.star", color="#0067c0"),
-                                       S.MENU_FIND_LEFTOVERS)
+        if self._is_tool(app):
+            act_run = menu.addAction(theme_icon("fa5s.play", color="#4ADE80"),
+                                     S.BTN_RUN_TOOL)
+        else:
+            act_run = None
+            act_uninstall = menu.addAction(theme_icon("fa.trash", color="#d13438"),
+                                           S.BTN_UNINSTALL)
+            act_leftovers = menu.addAction(theme_icon("fa.star", color="#0067c0"),
+                                           S.MENU_FIND_LEFTOVERS)
         action = menu.exec(self.view.mapToGlobal(self.view.visualRect(index).topLeft()))
         if action == act_open:
             self._open_folder(app)
-        elif action == act_uninstall:
-            self.main.uninstall_app(app)
-        elif action == act_leftovers:
-            self.main.find_leftovers(app)
+        elif act_run is not None and action == act_run:
+            self._run_tool(app)
+        elif not self._is_tool(app):
+            if action == act_uninstall:
+                self.main.uninstall_app(app)
+            elif action == act_leftovers:
+                self.main.find_leftovers(app)
 
     @staticmethod
     def _open_folder(app: InstalledApp) -> None:
@@ -257,12 +320,12 @@ class ProgramsScreen(QWidget):
 
     def _uninstall_selected(self) -> None:
         app = self._selected_app()
-        if app:
+        if app and not self._is_tool(app):
             self.main.uninstall_app(app)
 
     def _cleanup_selected(self) -> None:
         app = self._selected_app()
-        if app:
+        if app and not self._is_tool(app):
             self.main.find_leftovers(app)
 
     def _show_leftovers(self, app: InstalledApp, dirs: list, registry: list) -> None:

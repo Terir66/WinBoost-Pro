@@ -16,7 +16,9 @@ from PySide6.QtWidgets import (
 from . import strings as S
 from .theme import add_shadow
 from .widgets import AnimatedButton, QuickCleanWidget, SystemCard
-from .system_info import cpu_name, cpu_percent, free_ram_gb, gpu_percent, ram_percent
+from .system_info import (
+    cpu_name, cpu_percent, free_ram_gb, gpu_name, gpu_percent, ram_percent,
+)
 
 from cache import build_targets, human_size
 
@@ -124,6 +126,9 @@ class DashboardScreen(QWidget):
         self.cpu_info = QLabel(cpu_name())
         self.cpu_info.setObjectName("subtitle")
         state_layout.addWidget(self.cpu_info)
+        self.gpu_info = QLabel(f"GPU: {gpu_name()}")
+        self.gpu_info.setObjectName("subtitle")
+        state_layout.addWidget(self.gpu_info)
         top.addWidget(state_card, stretch=2)
         layout.addLayout(top)
 
@@ -232,10 +237,11 @@ class DashboardScreen(QWidget):
             gpu = gpu_percent()
             self.cpu_card.set_value(cpu)
             self.ram_card.set_value(ram, f"{ram:.0f}% · {free_ram_gb():.1f} ГБ свободно")
-            self.gpu_card.set_value(gpu, f"{gpu:.0f}%" if gpu > 0 else S.NOT_AVAILABLE)
+            gpu_text = f"{gpu:.0f}%" if gpu > 0 else gpu_name()[:34]
+            self.gpu_card.set_value(gpu, gpu_text)
             self._set_metric(self.tile_cpu, f"{cpu:.0f}%")
             self._set_metric(self.tile_ram, f"{ram:.0f}%")
-            self._set_metric(self.tile_gpu, f"{gpu:.0f}%" if gpu > 0 else S.NOT_AVAILABLE)
+            self._set_metric(self.tile_gpu, gpu_text)
             self._set_metric(self.tile_score, "72%")
         except Exception:
             pass
