@@ -8,13 +8,21 @@ from __future__ import annotations
 
 import glob
 import os
+import re
 from pathlib import Path
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QIcon, QStandardItem, QStandardItemModel
+try:
+    import winreg
+except Exception:  # pragma: no cover
+    winreg = None  # type: ignore
+
+from PySide6.QtCore import QModelIndex, Qt, QUrl
+from PySide6.QtGui import (
+    QDesktopServices, QIcon, QStandardItem, QStandardItemModel,
+)
 from PySide6.QtWidgets import (
-    QHBoxLayout, QLabel, QLineEdit, QMenu, QMessageBox, QProgressBar,
-    QTextEdit, QVBoxLayout, QWidget,
+    QAbstractItemView, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
+    QMenu, QMessageBox, QProgressBar, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from . import strings as S
@@ -58,6 +66,47 @@ def find_app_icon(app: InstalledApp) -> QIcon:
     return theme_icon("fa5s.box", color="#0067c0")
 
 
+def _exe_from(value: str) -> str:
+    """Достаёт путь к exe/dll/ico из строки вида '"C:\\Program\\app.exe",0'."""
+    pattern = r'\.(?:exe|dll|ico)'
+    match = re.search(r'"([^"]+' + pattern + r')"', value or "", re.IGNORECASE)
+    if not match:
+        match = re.search(r'([A-Za-z]:\\[^\s",]+' + pattern + r')',
+                          value or "", re.IGNORECASE)
+    return os.path.expandvars(match.group(1)) if match else ""
+
+
+def app_path(app: InstalledApp) -> str:
+    """Путь программы: InstallLocation → UninstallString → DisplayIcon из реестра."""
+    location = (app.install_location or "").strip().strip('"')
+    if location:
+        return os.path.expandvars(location)
+
+    command = (app.quiet_uninstall_string or app.uninstall_string or "").strip()
+    found = _exe_from(command)
+    if found:
+        return found
+
+    # Многие записи не имеют InstallLocation, но содержат DisplayIcon
+    if winreg is not None and app.key_name:
+        try:
+            root = (winreg.HKEY_LOCAL_MACHINE if app.root == "HKLM"
+                    else winreg.HKEY_CURRENT_USER)
+            view = winreg.KEY_WOW64_32KEY if app.view == "32-bit" else 0
+            reg_path = rf"Software\Microsoft\Windows\CurrentVersion\Uninstall\{app.key_name}"
+            with winreg.OpenKey(root, reg_path, 0, winreg.KEY_READ | view) as key:
+                try:
+                    icon = str(winreg.QueryValueEx(key, "DisplayIcon")[0])
+                except OSError:
+                    icon = ""
+            found = _exe_from(icon)
+            if found:
+                return found
+        except Exception:
+            pass
+    return "—"
+
+
 class ProgramsScreen(QWidget):
     def __init__(self, main_window, parent=None):
         super().__init__(parent)
@@ -86,11 +135,25 @@ class ProgramsScreen(QWidget):
         layout.addLayout(search_row)
 
         self.model = QStandardItemModel(self)
-        self.model.setHorizontalHeaderLabels(["Название", "Версия", "Издатель", "Размер"])
+        self.model.setHorizontalHeaderLabels([
+            S.COL_NAME if hasattr(S, "COL_NAME") else "Название",
+            "Версия", "Издатель", "Размер", S.COL_PATH,
+        ])
         self.view = ProgramListView()
         self.view.setModel(self.model)
+        self.view.setRootIsDecorated(False)
         self.view.setAlternatingRowColors(True)
-        self.view.setUniformItemSizes(True)
+        self.view.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.view.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.view.setUniformRowHeights(True)
+
+        header = self.view.header()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.Stretch)
+
         self.view.menu_requested.connect(self._show_row_menu)
         layout.addWidget(self.view, stretch=1)
 
@@ -136,20 +199,26 @@ class ProgramsScreen(QWidget):
         query = self.search.text().strip().lower()
         self.model.removeRows(0, self.model.rowCount())
         for app in self._apps:
-            if query and query not in app.name.lower() and query not in app.publisher.lower():
+            path = app_path(app)
+            haystack = f"{app.name} {app.publisher} {path}".lower()
+            if query and query not in haystack:
                 continue
             name_item = QStandardItem(find_app_icon(app), app.name)
             name_item.setData(app, Qt.UserRole)
+            path_item = QStandardItem(path)
+            path_item.setToolTip(path)
             self.model.appendRow([
                 name_item,
                 QStandardItem(app.version),
                 QStandardItem(app.publisher),
                 QStandardItem(human_size(app.estimated_size) if app.estimated_size else "—"),
+                path_item,
             ])
 
     def _app_at(self, index: QModelIndex) -> InstalledApp | None:
         if not index.isValid():
             return None
+        # данные хранятся в 0-й колонке, клик может быть в любой
         item = self.model.item(index.row(), 0)
         return item.data(Qt.UserRole) if item else None
 
@@ -161,13 +230,30 @@ class ProgramsScreen(QWidget):
         if not app:
             return
         menu = QMenu(self)
-        act_uninstall = menu.addAction(theme_icon("fa.trash", color="#d13438"), S.BTN_UNINSTALL)
-        act_leftovers = menu.addAction(theme_icon("fa.star", color="#0067c0"), S.MENU_FIND_LEFTOVERS)
+        act_open = menu.addAction(theme_icon("fa5s.folder-open", color="#0067c0"),
+                                  S.BTN_OPEN_FOLDER)
+        act_uninstall = menu.addAction(theme_icon("fa.trash", color="#d13438"),
+                                       S.BTN_UNINSTALL)
+        act_leftovers = menu.addAction(theme_icon("fa.star", color="#0067c0"),
+                                       S.MENU_FIND_LEFTOVERS)
         action = menu.exec(self.view.mapToGlobal(self.view.visualRect(index).topLeft()))
-        if action == act_uninstall:
+        if action == act_open:
+            self._open_folder(app)
+        elif action == act_uninstall:
             self.main.uninstall_app(app)
         elif action == act_leftovers:
             self.main.find_leftovers(app)
+
+    @staticmethod
+    def _open_folder(app: InstalledApp) -> None:
+        path = app_path(app)
+        if path == "—":
+            return
+        folder = Path(os.path.expandvars(path))
+        if folder.suffix:
+            folder = folder.parent
+        if folder.exists():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
 
     def _uninstall_selected(self) -> None:
         app = self._selected_app()

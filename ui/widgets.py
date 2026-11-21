@@ -7,14 +7,14 @@ ui/widgets.py — переиспользуемые визуальные комп
 from __future__ import annotations
 
 from PySide6.QtCore import (
-    QEasingCurve, QPropertyAnimation, QRect, QSize, Qt, QTimer, Signal,
+    QEasingCurve, QEvent, QPropertyAnimation, QRect, QSize, Qt, QTimer, Signal,
 )
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox, QFrame, QGraphicsOpacityEffect, QGraphicsPixmapItem,
     QGraphicsRotation, QGraphicsScene, QGraphicsView, QHBoxLayout,
-    QLabel, QListView, QProgressBar, QPushButton, QSizePolicy,
-    QStackedLayout, QVBoxLayout,
+    QLabel, QProgressBar, QPushButton, QSizePolicy,
+    QStackedLayout, QTreeView, QVBoxLayout,
 )
 
 from . import strings as S
@@ -480,29 +480,51 @@ class ToggleSwitch(QCheckBox):
 
 
 # ---------------------------------------------------------------- ProgramListView
-class ProgramListView(QListView):
-    """QListView со скрытой кнопкой «...», появляющейся при наведении."""
+class ProgramListView(QTreeView):
+    """
+    Таблица программ с плавающей кнопкой «...».
+
+    Важно: кнопка — ребёнок viewport(), а не самого QTreeView. События мыши
+    и visualRect() тоже работают в координатах viewport. Именно из-за этого
+    прежняя реализация с child-of-view не показывала кнопку при наведении.
+    """
 
     menu_requested = Signal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMouseTracking(True)
-        self._menu_button = AnimatedButton("...", self)
+        self.viewport().setMouseTracking(True)
+        self.viewport().installEventFilter(self)
+        self._current_index = None
+
+        self._menu_button = AnimatedButton("...", self.viewport())
         self._menu_button.setObjectName("iconBtn")
-        self._menu_button.setFixedSize(34, 28)
+        self._menu_button.setFixedSize(36, 28)
         self._menu_button.setHidden(True)
         self._menu_button.clicked.connect(self._on_menu_clicked)
-        self._current_index = None
+
         try:
             effect = QGraphicsOpacityEffect(self._menu_button)
             effect.setOpacity(0.0)
             self._menu_button.setGraphicsEffect(effect)
             self._fade = QPropertyAnimation(effect, b"opacity", self)
-            self._fade.setDuration(260)
+            self._fade.setDuration(220)
             self._fade.setEasingCurve(QEasingCurve.OutCubic)
         except Exception:
             self._fade = None
+
+    # ------------------------------------------------------------------
+    def eventFilter(self, obj, event) -> bool:
+        try:
+            if obj is self.viewport():
+                if event.type() in (QEvent.MouseMove, QEvent.Enter):
+                    self._update_button(event.position().toPoint())
+                elif event.type() == QEvent.Leave:
+                    self._fade_out()
+        except Exception:
+            pass
+        return super().eventFilter(obj, event)
 
     def _on_menu_clicked(self) -> None:
         if self._current_index is not None:
@@ -511,59 +533,54 @@ class ProgramListView(QListView):
             except Exception:
                 pass
 
-    def _place_button(self, index) -> None:
+    def _update_button(self, pos) -> None:
+        index = self.indexAt(pos)
+        if not index.isValid():
+            self._fade_out()
+            return
+        name_index = index.sibling(index.row(), 0)
+        self._current_index = name_index
         try:
             rect = self.visualRect(index)
-            self._menu_button.move(rect.right() - 40, rect.top() + 3)
+            self._menu_button.move(
+                max(0, rect.right() - self._menu_button.width() - 4),
+                max(0, rect.top() + 2),
+            )
+            self._menu_button.raise_()
+            self._fade_in()
         except Exception:
             pass
 
-    def _fade_in(self, index) -> None:
+    def _fade_in(self) -> None:
         try:
-            self._current_index = index
-            self._place_button(index)
-            self._menu_button.setHidden(False)
+            if self._menu_button.isHidden():
+                self._menu_button.show()
             if self._fade is not None:
                 self._fade.stop()
-                self._fade.setStartValue(self._menu_button.graphicsEffect().opacity())
+                self._fade.setStartValue(
+                    self._menu_button.graphicsEffect().opacity()
+                )
                 self._fade.setEndValue(1.0)
                 self._fade.start()
-            else:
-                self._menu_button.show()
         except Exception:
-            pass
+            self._menu_button.show()
 
     def _fade_out(self) -> None:
         try:
+            self._current_index = None
             if self._fade is not None:
                 self._fade.stop()
-                self._fade.setStartValue(self._menu_button.graphicsEffect().opacity())
+                self._fade.setStartValue(
+                    self._menu_button.graphicsEffect().opacity()
+                )
                 self._fade.setEndValue(0.0)
+                try:
+                    self._fade.finished.disconnect()
+                except Exception:
+                    pass
                 self._fade.finished.connect(self._menu_button.hide)
                 self._fade.start()
             else:
                 self._menu_button.hide()
         except Exception:
             self._menu_button.hide()
-
-    def enterEvent(self, event) -> None:
-        super().enterEvent(event)
-        try:
-            index = self.indexAt(event.position().toPoint())
-            if index.isValid():
-                self._fade_in(index)
-        except Exception:
-            pass
-
-    def leaveEvent(self, event) -> None:
-        super().leaveEvent(event)
-        self._fade_out()
-
-    def mouseMoveEvent(self, event) -> None:
-        super().mouseMoveEvent(event)
-        try:
-            index = self.indexAt(event.position().toPoint())
-            if index.isValid() and index != self._current_index:
-                self._fade_in(index)
-        except Exception:
-            pass
