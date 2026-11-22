@@ -771,6 +771,13 @@ class MainWindow(QMainWindow):
 
     # ---------------------------------------------------------------- закрытие
     def closeEvent(self, event: QCloseEvent) -> None:
+        try:
+            for screen in self.screens:
+                stopper = getattr(screen, "stop_monitor", None)
+                if callable(stopper):
+                    stopper()
+        except Exception:
+            pass
         workers = [
             self.clean_worker, self.service_worker, self.plan_worker,
             self.apply_worker, self.control_worker, self.apps_worker,

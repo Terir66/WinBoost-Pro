@@ -12,6 +12,8 @@ import platform
 import subprocess
 import time
 
+from PySide6.QtCore import QThread, Signal
+
 try:
     import winreg
 except Exception:  # pragma: no cover
@@ -182,13 +184,13 @@ def gpu_name() -> str:
 def gpu_percent() -> float:
     """
     Загрузка GPU: сначала nvidia-smi, затем счётчики WMI GPUEngine.
-    Значение кэшируется на 3 секунды — опрос сотен WMI-инстансов
-    каждые 1.8 с был слишком тяжёлым для GUI.
+    Значение кэшируется на 10 секунд — опрос сотен WMI-инстансов
+    слишком тяжёлый, чтобы делать его часто. Вызывается из фонового потока.
     """
     global _GPU_PERCENT_CACHE
     now = time.monotonic()
     cached_value, cached_at = _GPU_PERCENT_CACHE
-    if cached_at and now - cached_at < 3.0:
+    if cached_at and now - cached_at < 10.0:
         return cached_value
 
     result = 0.0
@@ -226,3 +228,38 @@ def gpu_percent() -> float:
 
     _GPU_PERCENT_CACHE = (result, now)
     return result
+
+
+class SystemMonitorWorker(QThread):
+    """
+    Фоновый опрос метрик. Тяжёлый запрос GPU (WMI/nvidia-smi) выполняется
+    здесь, поэтому GUI не замирает.
+
+    Сигнал: cpu%, ram%, gpu%, free_ram_gb.
+    """
+    metrics = Signal(float, float, float, float)
+
+    def __init__(self, interval_ms: int = 2500, parent=None):
+        super().__init__(parent)
+        self.interval_ms = interval_ms
+        self._running = True
+
+    def stop(self) -> None:
+        self._running = False
+        self.requestInterruption()
+
+    def run(self) -> None:
+        while self._running and not self.isInterruptionRequested():
+            try:
+                cpu = cpu_percent()
+                ram = ram_percent()
+                free = free_ram_gb()
+                gpu = gpu_percent()
+                self.metrics.emit(cpu, ram, gpu, free)
+            except Exception:
+                pass
+            # прерываемый сон вместо time.sleep
+            for _ in range(max(1, self.interval_ms // 100)):
+                if not self._running or self.isInterruptionRequested():
+                    return
+                self.msleep(100)

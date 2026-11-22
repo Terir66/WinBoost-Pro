@@ -7,7 +7,7 @@ ui/dashboard.py — экран «Главная» в стиле BoosterX.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QTextEdit,
     QVBoxLayout, QWidget,
@@ -16,9 +16,7 @@ from PySide6.QtWidgets import (
 from . import strings as S
 from .theme import add_shadow
 from .widgets import AnimatedButton, QuickCleanWidget, SystemCard
-from .system_info import (
-    cpu_name, cpu_percent, free_ram_gb, gpu_name, gpu_percent, ram_percent,
-)
+from .system_info import SystemMonitorWorker, cpu_name, gpu_name
 
 from cache import build_targets, human_size
 
@@ -172,11 +170,23 @@ class DashboardScreen(QWidget):
         except Exception:
             pass
 
-        self.monitor = QTimer(self)
-        self.monitor.setInterval(1800)
-        self.monitor.timeout.connect(self._refresh_metrics)
-        self._refresh_metrics()
-        self.monitor.start()
+        # стартовые значения — без обращения к WMI в GUI-потоке
+        self.cpu_card.set_value(0)
+        self.ram_card.set_value(0, "—")
+        self.gpu_card.set_value(0, gpu_name()[:34])
+
+        # тяжёлый опрос GPU/Metrics вынесен в фоновый поток
+        self.monitor_worker = SystemMonitorWorker(2500, self)
+        self.monitor_worker.metrics.connect(self._apply_metrics)
+        self.monitor_worker.start()
+
+    def stop_monitor(self) -> None:
+        try:
+            if self.monitor_worker and self.monitor_worker.isRunning():
+                self.monitor_worker.stop()
+                self.monitor_worker.wait(1500)
+        except Exception:
+            pass
 
     # ---------------------------------------------------------------- helpers
     @staticmethod
@@ -230,18 +240,16 @@ class DashboardScreen(QWidget):
         except Exception:
             self.estimate_label.setText("Доступно к очистке: н/д")
 
-    def _refresh_metrics(self) -> None:
+    def _apply_metrics(self, cpu: float, ram: float, gpu: float,
+                       free_gb: float) -> None:
+        """Вызывается сигналом из фонового потока — только обновление GUI."""
         try:
-            cpu = cpu_percent()
-            ram = ram_percent()
-            gpu = gpu_percent()
-            self.cpu_card.set_value(cpu)
-            self.ram_card.set_value(ram, f"{ram:.0f}% · {free_ram_gb():.1f} ГБ свободно")
             gpu_text = f"{gpu:.0f}%" if gpu > 0 else gpu_name()[:34]
+            self.cpu_card.set_value(cpu)
+            self.ram_card.set_value(ram, f"{ram:.0f}% · {free_gb:.1f} ГБ свободно")
             self.gpu_card.set_value(gpu, gpu_text)
             self._set_metric(self.tile_cpu, f"{cpu:.0f}%")
             self._set_metric(self.tile_ram, f"{ram:.0f}%")
             self._set_metric(self.tile_gpu, gpu_text)
-            self._set_metric(self.tile_score, "72%")
         except Exception:
             pass

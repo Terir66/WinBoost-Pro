@@ -16,7 +16,7 @@ try:
 except Exception:  # pragma: no cover
     winreg = None  # type: ignore
 
-from PySide6.QtCore import QModelIndex, Qt, QUrl
+from PySide6.QtCore import QModelIndex, Qt, QTimer, QUrl
 from PySide6.QtGui import (
     QDesktopServices, QIcon, QStandardItem, QStandardItemModel,
 )
@@ -62,7 +62,8 @@ def find_app_icon(app: InstalledApp) -> QIcon:
         try:
             if not folder or not folder.exists():
                 continue
-            files = glob.glob(str(folder / "*.ico")) + glob.glob(str(folder / "**" / "*.ico"))
+            # только сразу в папке: рекурсивный обход Program Files был очень медленным
+            files = glob.glob(str(folder / "*.ico"))
             for path in files[:5]:
                 result = QIcon(path)
                 if not result.isNull():
@@ -145,6 +146,8 @@ class ProgramsScreen(QWidget):
         self.main = main_window
         self._apps: list[InstalledApp] = []
         self._tool_names: set[str] = set()
+        self._icon_cache: dict[tuple, QIcon] = {}
+        self._path_cache: dict[tuple, str] = {}
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 22, 24, 22)
@@ -160,7 +163,12 @@ class ProgramsScreen(QWidget):
         search_row = QHBoxLayout()
         self.search = QLineEdit()
         self.search.setPlaceholderText(S.SEARCH_PLACEHOLDER)
-        self.search.textChanged.connect(self._filter)
+        # дебаунс: фильтрация не должна пересобирать 75 строк на каждую букву
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(140)
+        self._search_timer.timeout.connect(self._filter)
+        self.search.textChanged.connect(self._on_search_changed)
         search_row.addWidget(self.search)
         self.refresh_btn = AnimatedButton(S.BTN_REFRESH)
         self.refresh_btn.clicked.connect(self.main.scan_apps)
@@ -231,17 +239,40 @@ class ProgramsScreen(QWidget):
         tools = extra_tool_apps()
         self._tool_names = {tool.name for tool in tools}
         self._apps = apps + tools
+        # кэши больше не соответствуют списку — очищаем при обновлении
+        self._icon_cache.clear()
+        self._path_cache.clear()
         self._filter()
+
+    @staticmethod
+    def _app_key(app: InstalledApp) -> tuple:
+        return (app.name, app.install_location, app.uninstall_string,
+                app.quiet_uninstall_string, app.key_name, app.root, app.view)
+
+    def _icon(self, app: InstalledApp) -> QIcon:
+        key = self._app_key(app)
+        if key not in self._icon_cache:
+            self._icon_cache[key] = find_app_icon(app)
+        return self._icon_cache[key]
+
+    def _path(self, app: InstalledApp) -> str:
+        key = self._app_key(app)
+        if key not in self._path_cache:
+            self._path_cache[key] = app_path(app)
+        return self._path_cache[key]
+
+    def _on_search_changed(self, _text: str) -> None:
+        self._search_timer.start()
 
     def _filter(self) -> None:
         query = self.search.text().strip().lower()
         self.model.removeRows(0, self.model.rowCount())
         for app in self._apps:
-            path = app_path(app)
+            path = self._path(app)
             haystack = f"{app.name} {app.publisher} {path}".lower()
             if query and query not in haystack:
                 continue
-            name_item = QStandardItem(find_app_icon(app), app.name)
+            name_item = QStandardItem(self._icon(app), app.name)
             name_item.setData(app, Qt.UserRole)
             path_item = QStandardItem(path)
             path_item.setToolTip(path)
@@ -267,7 +298,7 @@ class ProgramsScreen(QWidget):
         return bool(app and app.name in self._tool_names)
 
     def _run_tool(self, app: InstalledApp) -> None:
-        path = app_path(app)
+        path = self._path(app)
         if path == "—":
             return
         try:
@@ -309,7 +340,7 @@ class ProgramsScreen(QWidget):
 
     @staticmethod
     def _open_folder(app: InstalledApp) -> None:
-        path = app_path(app)
+        path = self._path(app)
         if path == "—":
             return
         folder = Path(os.path.expandvars(path))
