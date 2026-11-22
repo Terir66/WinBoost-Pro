@@ -122,6 +122,35 @@ WinBoost/
 
 ---
 
+## Windows SmartScreen
+
+exe пока **не подписан кодом**, поэтому Windows может показать
+«Windows защитил ваш компьютер». Это репутация файла, а не вирус: приложение
+открытый исходник. Ни в коем случае не отключайте SmartScreen и Defender.
+
+Что можно сделать:
+
+1. **После скачивания снять маркер «скачано из интернета»:**
+   ```powershell
+   Unblock-File -Path .\WinBoost.exe
+   ```
+   или запустите готовый скрипт:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\tools\unblock.ps1
+   ```
+2. В окне SmartScreen нажать **«Дополнительные сведения» → «Выполнить всё равно»**.
+   После нескольких запусков репутация файла повышается.
+3. Отправить файл на анализ в Microsoft:
+   https://www.microsoft.com/en-us/wdsi/filesubmission
+4. **Гарантированный способ** — подписать exe сертификатом подписи кода
+   (лучше EV). Это убирает предупреждение сразу:
+   ```powershell
+   signtool sign /f cert.pfx /p PASSWORD /tr http://timestamp.digicert.com /td sha256 /fd sha256 WinBoost.exe
+   ```
+
+Мы намеренно не меняем системные настройки безопасности: обойти SmartScreen
+программно — значит сделать приложение похожим на вредоносное.
+
 ## Лицензия
 
 [MIT](LICENSE). Вы можете изменить год/автора в `LICENSE` перед публикацией.
