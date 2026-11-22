@@ -10,6 +10,7 @@ import ctypes
 import os
 import platform
 import subprocess
+import time
 
 try:
     import winreg
@@ -128,8 +129,17 @@ def cpu_percent() -> float:
     return 0.0
 
 
+_GPU_NAME_CACHE: str | None = None
+_GPU_PERCENT_CACHE: tuple[float, float] = (0.0, 0.0)
+
+
 def gpu_name() -> str:
-    """Имя видеокарты через WMI (для AMD/Intel/NVIDIA)."""
+    """Имя видеокарты через WMI (AMD/Intel/NVIDIA). Результат кэшируется."""
+    global _GPU_NAME_CACHE
+    if _GPU_NAME_CACHE is not None:
+        return _GPU_NAME_CACHE
+
+    result = "неизвестно"
     try:
         import wmi
         names = [str(item.Name).strip() for item in
@@ -140,33 +150,48 @@ def gpu_name() -> str:
                 lowered = name.lower()
                 if any(word in lowered for word in ("nvidia", "geforce", "rtx",
                                                     "gtx", "radeon rx", "arc")):
-                    return name
-            return names[0]
+                    result = name
+                    break
+            else:
+                result = names[0]
     except Exception:
         pass
-    try:
-        out = subprocess.run(
-            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
-             "(Get-CimInstance Win32_VideoController).Name -join ', '"],
-            capture_output=True, timeout=8, check=False,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-        raw = out.stdout or b""
-        for encoding in ("utf-8", "cp866", "cp1251"):
-            try:
-                return raw.decode(encoding).strip()
-            except UnicodeDecodeError:
-                continue
-    except Exception:
-        pass
-    return "неизвестно"
+
+    if result == "неизвестно":
+        try:
+            out = subprocess.run(
+                ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+                 "(Get-CimInstance Win32_VideoController).Name -join ', '"],
+                capture_output=True, timeout=8, check=False,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            raw = out.stdout or b""
+            for encoding in ("utf-8", "cp866", "cp1251"):
+                try:
+                    result = raw.decode(encoding).strip() or "неизвестно"
+                    break
+                except UnicodeDecodeError:
+                    continue
+        except Exception:
+            pass
+
+    _GPU_NAME_CACHE = result
+    return result
 
 
 def gpu_percent() -> float:
     """
-    Загрузка GPU: сначала nvidia-smi, затем WMI-счётчики GPUEngine
-    (работают и для AMD/Intel). Никаких изменений ядра — только чтение.
+    Загрузка GPU: сначала nvidia-smi, затем счётчики WMI GPUEngine.
+    Значение кэшируется на 3 секунды — опрос сотен WMI-инстансов
+    каждые 1.8 с был слишком тяжёлым для GUI.
     """
+    global _GPU_PERCENT_CACHE
+    now = time.monotonic()
+    cached_value, cached_at = _GPU_PERCENT_CACHE
+    if cached_at and now - cached_at < 3.0:
+        return cached_value
+
+    result = 0.0
     try:
         out = subprocess.run(
             ["nvidia-smi", "--query-gpu=utilization.gpu", "--format=csv,noheader,nounits"],
@@ -175,26 +200,29 @@ def gpu_percent() -> float:
         )
         value = (out.stdout or "").strip().splitlines()
         if value:
-            return max(0.0, min(100.0, float(value[0].strip())))
+            result = max(0.0, min(100.0, float(value[0].strip())))
     except Exception:
         pass
 
-    try:
-        import wmi
-        rows = wmi.WMI().Win32_PerfFormattedData_GPUPerformanceCounters_GPUEngine()
-        total = 0.0
-        found = False
-        for row in rows:
-            try:
-                name = str(getattr(row, "Name", "") or "")
-                if "engtype_3D" not in name:
+    if result == 0.0:
+        try:
+            import wmi
+            rows = wmi.WMI().Win32_PerfFormattedData_GPUPerformanceCounters_GPUEngine()
+            total = 0.0
+            found = False
+            for row in rows:
+                try:
+                    name = str(getattr(row, "Name", "") or "")
+                    if "engtype_3D" not in name:
+                        continue
+                    total += float(getattr(row, "UtilizationPercentage", 0) or 0)
+                    found = True
+                except Exception:
                     continue
-                total += float(getattr(row, "UtilizationPercentage", 0) or 0)
-                found = True
-            except Exception:
-                continue
-        if found:
-            return max(0.0, min(100.0, total))
-    except Exception:
-        pass
-    return 0.0
+            if found:
+                result = max(0.0, min(100.0, total))
+        except Exception:
+            pass
+
+    _GPU_PERCENT_CACHE = (result, now)
+    return result

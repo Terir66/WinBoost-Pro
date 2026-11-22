@@ -35,7 +35,7 @@
 ## Установка и запуск
 
 ```powershell
-git clone https://github.com/<ваш-логин>/WinBoost-Pro.git
+git clone https://github.com/Terir66/WinBoost-Pro.git
 cd WinBoost-Pro
 
 python -m venv .venv
@@ -62,9 +62,16 @@ python -m pip install pyinstaller
 python -m PyInstaller --noconfirm --onefile --windowed --clean --name "WinBoost" --icon "winboost.ico" --hidden-import PySide6.QtCore --hidden-import PySide6.QtGui --hidden-import PySide6.QtWidgets --hidden-import psutil --hidden-import qtawesome --hidden-import pyqtgraph --hidden-import wmi --hidden-import win32api --hidden-import win32service --hidden-import win32com.client main.py
 ```
 
-Результат: `dist\WinBoost.exe`. Готовый бинарник лучше выкладывать в
-**GitHub Releases**, а не в репозиторий — папки `dist/`, `build/` и `*.spec`
-уже исключены через `.gitignore`.
+Результат: `dist\WinBoost.exe`. Готовый бинарник выложен в
+[GitHub Releases](https://github.com/Terir66/WinBoost-Pro/releases/latest):
+
+```
+https://github.com/Terir66/WinBoost-Pro/releases/download/v1.0.0/WinBoost.exe
+```
+
+Папки `dist/`, `build/` и `*.spec` исключены через `.gitignore` — в репозитории
+хранятся только исходники. Хэш актуального exe публикуется на странице релиза
+(кнопка `Copy to clipboard digest`).
 
 ---
 

@@ -12,6 +12,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from cache import app_data_dir
 from startup import collect_startup_entries, restore_startup_entries
 
 
@@ -25,15 +26,26 @@ def app_directory() -> Path:
     return Path(__file__).resolve().parent
 
 
-BACKUP_DIR = app_directory() / "backups"
-
-
 def ensure_backup_dir() -> Path:
+    """
+    Папка бекапов рядом с приложением. Если каталог только для чтения
+    (например, Program Files) — откатываемся в %LOCALAPPDATA%\\WinBoost.
+    """
+    primary = app_directory() / "backups"
     try:
-        BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        primary.mkdir(parents=True, exist_ok=True)
+        # проверяем, что туда действительно можно писать
+        probe = primary / ".write_test"
+        probe.write_text("", encoding="utf-8")
+        probe.unlink(missing_ok=True)
+        return primary
     except Exception:
-        pass
-    return BACKUP_DIR
+        fallback = app_data_dir() / "backups"
+        try:
+            fallback.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        return fallback
 
 
 def collect_services_state(manager) -> list[dict]:
